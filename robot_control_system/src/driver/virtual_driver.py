@@ -105,8 +105,15 @@ class VirtualAxis:
     
     def home(self):
         """回原点"""
-        self.set_target(0.0)
+        # 直接设置到零位（简化处理，实际应该是缓慢移动）
+        self.current_position = 0.0
+        self.target_position = 0.0
+        self.velocity = 0.0
+        self.is_moving = False
+        self.in_position = True
         self.homed = True
+        if self.enabled:
+            self.state = AxisState.ENABLED
     
     def reset_error(self):
         """复位错误"""

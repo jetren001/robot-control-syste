@@ -168,6 +168,11 @@ class ControlPanel(QWidget):
     program_start_clicked = pyqtSignal()
     program_stop_clicked = pyqtSignal()
     program_pause_clicked = pyqtSignal()
+    joints_zero_clicked = pyqtSignal()  # 全部归零信号
+    record_point_clicked = pyqtSignal(list)  # 记录点位信号，传递当前关节角度
+    teach_pick_clicked = pyqtSignal()  # 示教取料点
+    teach_place_clicked = pyqtSignal()  # 示教放料点
+    drag_teaching_changed = pyqtSignal(bool)  # 拖动示教开关
     
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -369,6 +374,23 @@ class ControlPanel(QWidget):
             jog_layout.addWidget(btn, row, col)
         
         layout.addWidget(jog_group)
+        
+        # 拖动示教
+        drag_group = QGroupBox("拖动示教")
+        drag_layout = QHBoxLayout(drag_group)
+        
+        self.btn_drag_teaching = QPushButton("启用拖动示教")
+        self.btn_drag_teaching.setCheckable(True)
+        self.btn_drag_teaching.setStyleSheet("""
+            QPushButton { background-color: #607D8B; color: white; }
+            QPushButton:checked { background-color: #4CAF50; }
+        """)
+        self.btn_drag_teaching.setMinimumHeight(40)
+        drag_layout.addWidget(self.btn_drag_teaching)
+        
+        drag_layout.addWidget(QLabel("提示: 启用后可在3D视图中拖动机器人末端"))
+        
+        layout.addWidget(drag_group)
         layout.addStretch()
         
         self.tab_widget.addTab(tab, "TCP控制")
@@ -377,6 +399,49 @@ class ControlPanel(QWidget):
         """创建码垛程序选项卡"""
         tab = QWidget()
         layout = QVBoxLayout(tab)
+        
+        # 示教点位
+        teach_group = QGroupBox("示教点位")
+        teach_layout = QGridLayout(teach_group)
+        
+        # 取料点
+        teach_layout.addWidget(QLabel("取料点:"), 0, 0)
+        self.label_pick_point = QLabel("未设置")
+        self.label_pick_point.setStyleSheet("color: gray;")
+        teach_layout.addWidget(self.label_pick_point, 0, 1)
+        self.btn_teach_pick = QPushButton("示教")
+        self.btn_teach_pick.setMaximumWidth(60)
+        teach_layout.addWidget(self.btn_teach_pick, 0, 2)
+        
+        # 放料起始点
+        teach_layout.addWidget(QLabel("放料点:"), 1, 0)
+        self.label_place_point = QLabel("未设置")
+        self.label_place_point.setStyleSheet("color: gray;")
+        teach_layout.addWidget(self.label_place_point, 1, 1)
+        self.btn_teach_place = QPushButton("示教")
+        self.btn_teach_place.setMaximumWidth(60)
+        teach_layout.addWidget(self.btn_teach_place, 1, 2)
+        
+        # 间距设置
+        teach_layout.addWidget(QLabel("X间距(mm):"), 2, 0)
+        self.spin_x_spacing = QSpinBox()
+        self.spin_x_spacing.setRange(10, 200)
+        self.spin_x_spacing.setValue(50)
+        teach_layout.addWidget(self.spin_x_spacing, 2, 1)
+        
+        teach_layout.addWidget(QLabel("Y间距(mm):"), 2, 2)
+        self.spin_y_spacing = QSpinBox()
+        self.spin_y_spacing.setRange(10, 200)
+        self.spin_y_spacing.setValue(50)
+        teach_layout.addWidget(self.spin_y_spacing, 2, 3)
+        
+        teach_layout.addWidget(QLabel("Z间距(mm):"), 3, 0)
+        self.spin_z_spacing = QSpinBox()
+        self.spin_z_spacing.setRange(10, 200)
+        self.spin_z_spacing.setValue(30)
+        teach_layout.addWidget(self.spin_z_spacing, 3, 1)
+        
+        layout.addWidget(teach_group)
         
         # 码垛配置
         config_group = QGroupBox("码垛配置")
@@ -501,6 +566,7 @@ class ControlPanel(QWidget):
         
         # 归零按钮
         self.btn_zero.clicked.connect(self._on_zero_clicked)
+        self.btn_record.clicked.connect(self._on_record_clicked)
         
         # TCP点动按钮 - 使用clicked信号
         for name, btn in self.tcp_jog_buttons.items():
@@ -517,6 +583,13 @@ class ControlPanel(QWidget):
         self.btn_start.clicked.connect(self.program_start_clicked.emit)
         self.btn_stop.clicked.connect(self.program_stop_clicked.emit)
         self.btn_pause.clicked.connect(self.program_pause_clicked.emit)
+        
+        # 示教点位
+        self.btn_teach_pick.clicked.connect(self.teach_pick_clicked.emit)
+        self.btn_teach_place.clicked.connect(self.teach_place_clicked.emit)
+        
+        # 拖动示教
+        self.btn_drag_teaching.toggled.connect(self.drag_teaching_changed.emit)
         
         # 码垛配置变化
         self.spin_rows.valueChanged.connect(self._update_total)
@@ -550,8 +623,19 @@ class ControlPanel(QWidget):
         self.speed_changed.emit(value)
     
     def _on_zero_clicked(self):
+        """全部归零按钮点击"""
+        # 更新UI显示
         for jc in self.joint_controls:
             jc.set_value(0)
+        # 发送信号让机器人移动到零位
+        self.joints_zero_clicked.emit()
+    
+    def _on_record_clicked(self):
+        """记录点位按钮点击"""
+        # 获取当前关节角度
+        current_joints = [jc.get_value() for jc in self.joint_controls]
+        print(f"[ControlPanel] 记录点位: {current_joints}")
+        self.record_point_clicked.emit(current_joints)
     
     def _update_total(self):
         total = self.spin_rows.value() * self.spin_cols.value() * self.spin_layers.value()
@@ -624,6 +708,27 @@ class ControlPanel(QWidget):
             self.progress_bar.setValue(int(current / total * 100))
         else:
             self.progress_bar.setValue(0)
+    
+    def set_pick_point(self, tcp_pos):
+        """设置取料点显示"""
+        self.label_pick_point.setText(f"X:{tcp_pos[0]:.1f} Y:{tcp_pos[1]:.1f} Z:{tcp_pos[2]:.1f}")
+        self.label_pick_point.setStyleSheet("color: green; font-weight: bold;")
+    
+    def set_place_point(self, tcp_pos):
+        """设置放料点显示"""
+        self.label_place_point.setText(f"X:{tcp_pos[0]:.1f} Y:{tcp_pos[1]:.1f} Z:{tcp_pos[2]:.1f}")
+        self.label_place_point.setStyleSheet("color: green; font-weight: bold;")
+    
+    def get_palletizing_config(self):
+        """获取码垛配置"""
+        return {
+            'rows': self.spin_rows.value(),
+            'cols': self.spin_cols.value(),
+            'layers': self.spin_layers.value(),
+            'x_spacing': self.spin_x_spacing.value(),
+            'y_spacing': self.spin_y_spacing.value(),
+            'z_spacing': self.spin_z_spacing.value()
+        }
     
     def enable_controls(self, enabled: bool):
         """启用/禁用控件"""

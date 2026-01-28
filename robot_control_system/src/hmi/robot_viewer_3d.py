@@ -42,9 +42,12 @@ class RobotViewer3D(QWidget):
     - 实时更新关节角度
     - 显示TCP轨迹
     - 显示坐标系
+    - 显示物料箱子和托盘
+    - 支持拖动示教
     """
     
     joint_angles_changed = pyqtSignal(list)
+    tcp_dragged = pyqtSignal(list, list)  # 拖动示教信号 (position, orientation)
     
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -65,6 +68,20 @@ class RobotViewer3D(QWidget):
         self._trajectory_actor = None
         self._coordinate_actors = []
         
+        # 物料和场景对象
+        self._pick_box_actor = None      # 取料位的箱子
+        self._pallet_actor = None        # 托盘
+        self._placed_boxes = []          # 已放置的箱子actors
+        self._pick_position = None       # 取料位置
+        self._place_base_position = None # 放料起始位置
+        self._gripper_holding = False    # 夹爪是否抓取中
+        self._gripper_box_actor = None   # 夹爪上的箱子
+        
+        # 拖动示教相关
+        self._drag_enabled = False
+        self._dragging = False
+        self._tcp_sphere_actor = None
+        
         self._setup_ui()
     
     def _setup_ui(self):
@@ -75,11 +92,14 @@ class RobotViewer3D(QWidget):
         if PYVISTA_AVAILABLE:
             # 创建PyVista交互器
             self._plotter = QtInteractor(self)
-            self._plotter.set_background('#2d2d2d')
+            self._plotter.set_background('#1a1a2e')
             layout.addWidget(self._plotter.interactor)
             
             # 初始化场景
             self._init_scene()
+            
+            # 设置鼠标交互回调
+            self._setup_mouse_interaction()
         else:
             # 无PyVista时显示占位
             placeholder = QLabel("PyVista未安装\n请运行: pip install pyvista pyvistaqt")
@@ -98,10 +118,15 @@ class RobotViewer3D(QWidget):
         if not self._plotter:
             return
         
-        # 添加地面网格
-        grid = pv.Plane(center=(0, 0, 0), direction=(0, 0, 1), 
-                       i_size=1000, j_size=1000, i_resolution=20, j_resolution=20)
-        self._plotter.add_mesh(grid, color='#404040', opacity=0.3, 
+        # 添加地面 (更真实的地面)
+        floor = pv.Plane(center=(300, 0, -5), direction=(0, 0, 1), 
+                        i_size=1500, j_size=1200, i_resolution=1, j_resolution=1)
+        self._plotter.add_mesh(floor, color='#3a3a3a', opacity=1.0)
+        
+        # 添加地面网格线
+        grid = pv.Plane(center=(300, 0, 0), direction=(0, 0, 1), 
+                       i_size=1500, j_size=1200, i_resolution=30, j_resolution=24)
+        self._plotter.add_mesh(grid, color='#505050', opacity=0.5, 
                               style='wireframe', line_width=1)
         
         # 添加世界坐标系
@@ -110,18 +135,285 @@ class RobotViewer3D(QWidget):
         # 初始绘制机器人
         self._draw_robot()
         
+        # 添加默认的取料台和托盘
+        self._setup_material_scene()
+        
         # 设置相机
         self._plotter.camera_position = [
-            (1200, -800, 800),   # 相机位置
-            (200, 0, 300),      # 焦点
-            (0, 0, 1)           # 上方向
+            (1000, -1000, 800),   # 相机位置
+            (300, 0, 200),       # 焦点
+            (0, 0, 1)            # 上方向
         ]
         
         # 添加光源
-        self._plotter.add_light(pv.Light(position=(500, 500, 1000), intensity=0.8))
+        self._plotter.add_light(pv.Light(position=(500, 500, 1000), intensity=0.7))
+        self._plotter.add_light(pv.Light(position=(-500, 500, 800), intensity=0.3))
+    
+    def _setup_material_scene(self):
+        """设置物料场景"""
+        if not self._plotter:
+            return
+        
+        # 取料台 (左侧) - 带传送带效果
+        pick_table = pv.Box(bounds=(450, 650, -200, 0, 0, 80))
+        self._plotter.add_mesh(pick_table, color='#2196F3', opacity=0.9)
+        
+        # 取料台上的箱子 (无限供料)
+        self._pick_position = [550, -100, 110]
+        self._update_pick_box()
+        
+        # 放料托盘 (右侧) - 木托盘
+        pallet_base = pv.Box(bounds=(450, 750, 100, 400, 0, 20))
+        self._pallet_actor = self._plotter.add_mesh(pallet_base, color='#8B4513', opacity=0.9)
+        
+        # 托盘横条
+        for i in range(5):
+            slat = pv.Box(bounds=(450, 750, 100 + i*75, 110 + i*75, 20, 30))
+            self._plotter.add_mesh(slat, color='#A0522D', opacity=0.9)
+        
+        self._place_base_position = [500, 150, 50]
+        
+        # 添加标签
+        self._plotter.add_text("取料台", position=(520, 50, 150), font_size=12, color='white')
+        self._plotter.add_text("码垛托盘", position=(550, 350, 100), font_size=12, color='white')
+    
+    def _update_pick_box(self):
+        """更新取料位的箱子"""
+        if not self._plotter:
+            return
+        
+        if self._pick_box_actor:
+            self._plotter.remove_actor(self._pick_box_actor)
+        
+        # 创建箱子 (纸箱颜色)
+        pos = self._pick_position
+        box = pv.Box(bounds=(pos[0]-30, pos[0]+30, pos[1]-30, pos[1]+30, 
+                            pos[2]-30, pos[2]+30))
+        self._pick_box_actor = self._plotter.add_mesh(box, color='#D2691E', opacity=0.95)
+    
+    def set_pick_position(self, tcp_pos):
+        """设置取料位置"""
+        self._pick_position = list(tcp_pos)
+        self._update_pick_box()
+        if self._plotter:
+            self._plotter.render()
+    
+    def set_place_position(self, tcp_pos):
+        """设置放料起始位置"""
+        self._place_base_position = list(tcp_pos)
+    
+    def pick_box(self):
+        """抓取箱子"""
+        self._gripper_holding = True
+        # 取料位的箱子变暗（表示正在抓取）
+        if self._pick_box_actor:
+            self._plotter.remove_actor(self._pick_box_actor)
+        self._update_gripper_box()
+    
+    def place_box(self, position=None):
+        """放置箱子 - 使用当前TCP位置"""
+        if not self._gripper_holding or not self._plotter:
+            return
+        
+        self._gripper_holding = False
+        
+        # 移除夹爪上的箱子
+        if self._gripper_box_actor:
+            self._plotter.remove_actor(self._gripper_box_actor)
+            self._gripper_box_actor = None
+        
+        # 获取当前真实TCP位置作为放置位置
+        if self.kinematics:
+            pose = self.kinematics.forward_kinematics(self._joint_angles)
+            actual_pos = pose.position
+        else:
+            actual_pos = position if position else [0, 0, 0]
+        
+        # 在真实TCP位置放置箱子（箱子底部在TCP下方）
+        box = pv.Box(bounds=(actual_pos[0]-30, actual_pos[0]+30, 
+                            actual_pos[1]-30, actual_pos[1]+30,
+                            actual_pos[2]-60, actual_pos[2]))
+        actor = self._plotter.add_mesh(box, color='#D2691E', opacity=0.95)
+        self._placed_boxes.append(actor)
+        
+        print(f"[3D] 箱子放置在真实TCP位置: [{actual_pos[0]:.1f}, {actual_pos[1]:.1f}, {actual_pos[2]:.1f}]")
+        
+        # 恢复取料位的箱子
+        self._update_pick_box()
+        
+        if self._plotter:
+            self._plotter.render()
+    
+    def _update_gripper_box(self):
+        """更新夹爪上的箱子"""
+        if not self._gripper_holding or not self._plotter:
+            return
+        
+        if self._gripper_box_actor:
+            self._plotter.remove_actor(self._gripper_box_actor)
+        
+        # 获取当前TCP位置
+        if self.kinematics:
+            pose = self.kinematics.forward_kinematics(self._joint_angles)
+            pos = pose.position
+            box = pv.Box(bounds=(pos[0]-30, pos[0]+30, 
+                                pos[1]-30, pos[1]+30,
+                                pos[2]-60, pos[2]))
+            self._gripper_box_actor = self._plotter.add_mesh(box, color='#FF8C00', opacity=0.9)
+    
+    def clear_placed_boxes(self):
+        """清除所有已放置的箱子"""
+        if not self._plotter:
+            return
+        for actor in self._placed_boxes:
+            self._plotter.remove_actor(actor)
+        self._placed_boxes.clear()
+        if self._plotter:
+            self._plotter.render()
+    
+    def _setup_mouse_interaction(self):
+        """设置鼠标交互"""
+        if not self._plotter:
+            return
+        
+        # 存储鼠标拖动状态
+        self._drag_state = {
+            'dragging': False,
+            'start_pos': None,
+            'start_tcp': None,
+            'drag_plane': None,  # 拖动平面
+        }
+        
+        # 添加提示文字
+        self._plotter.add_text(
+            "SR5-C 机器人控制系统",
+            position='upper_left', font_size=10, color='white', name='help_text'
+        )
+        
+        # 获取交互器并添加观察者
+        try:
+            iren = self._plotter.iren.interactor
+            if iren:
+                iren.AddObserver('LeftButtonPressEvent', self._on_left_button_press)
+                iren.AddObserver('LeftButtonReleaseEvent', self._on_left_button_release)
+                iren.AddObserver('MouseMoveEvent', self._on_mouse_move)
+        except Exception as e:
+            print(f"[3D] 设置鼠标交互失败: {e}")
+    
+    def _on_left_button_press(self, obj, event):
+        """鼠标左键按下"""
+        if not self._drag_enabled:
+            return
+        
+        # 获取点击位置
+        click_pos = self._plotter.iren.interactor.GetEventPosition()
+        
+        # 检测是否点击了TCP球体
+        picker = self._plotter.iren.picker
+        picker.Pick(click_pos[0], click_pos[1], 0, self._plotter.renderer)
+        
+        picked_pos = picker.GetPickPosition()
+        if picked_pos and any(p != 0 for p in picked_pos):
+            # 检查是否接近TCP
+            pose = self.kinematics.forward_kinematics(self._joint_angles)
+            tcp_pos = pose.position
+            
+            dist = np.linalg.norm(np.array(picked_pos) - tcp_pos)
+            if dist < 50:  # 50mm范围内认为点击了TCP
+                self._drag_state['dragging'] = True
+                self._drag_state['start_pos'] = np.array(picked_pos)
+                self._drag_state['start_tcp'] = tcp_pos.copy()
+                
+                # 设置拖动平面 (XY平面，Z等于当前TCP高度)
+                self._drag_state['drag_plane'] = tcp_pos[2]
+                
+                print(f"[3D] 开始拖动 TCP: {tcp_pos}")
+                
+                # 更新提示
+                self._plotter.add_text(
+                    f"拖动中... TCP: [{tcp_pos[0]:.0f}, {tcp_pos[1]:.0f}, {tcp_pos[2]:.0f}]",
+                    position='upper_left', font_size=12, color='lime', name='help_text'
+                )
+    
+    def _on_left_button_release(self, obj, event):
+        """鼠标左键释放"""
+        if self._drag_state.get('dragging'):
+            self._drag_state['dragging'] = False
+            
+            # 获取最终位置
+            pose = self.kinematics.forward_kinematics(self._joint_angles)
+            tcp_pos = pose.position
+            
+            print(f"[3D] 拖动结束 TCP: {tcp_pos}")
+            
+            self._plotter.add_text(
+                f"拖动示教已启用 - 左键拖动绿色球体 | TCP: [{tcp_pos[0]:.0f}, {tcp_pos[1]:.0f}, {tcp_pos[2]:.0f}]",
+                position='upper_left', font_size=12, color='lime', name='help_text'
+            )
+    
+    def _on_mouse_move(self, obj, event):
+        """鼠标移动"""
+        if not self._drag_state.get('dragging'):
+            return
+        
+        # 获取当前鼠标位置
+        mouse_pos = self._plotter.iren.interactor.GetEventPosition()
+        
+        # 将屏幕坐标转换为世界坐标
+        picker = self._plotter.iren.picker
+        picker.Pick(mouse_pos[0], mouse_pos[1], 0, self._plotter.renderer)
+        
+        world_pos = picker.GetPickPosition()
+        if world_pos and any(p != 0 for p in world_pos):
+            # 计算新的TCP位置 (保持Z不变，或者使用拖动平面)
+            new_tcp = np.array([
+                world_pos[0],
+                world_pos[1],
+                self._drag_state['drag_plane']  # 保持Z高度
+            ])
+            
+            # 获取当前姿态
+            current_pose = self.kinematics.forward_kinematics(self._joint_angles)
+            target_ori = current_pose.euler_angles.tolist()
+            
+            # 发送信号让主程序处理逆运动学
+            self.tcp_dragged.emit(new_tcp.tolist(), target_ori)
+            
+            # 更新提示
+            self._plotter.add_text(
+                f"拖动中... TCP: [{new_tcp[0]:.0f}, {new_tcp[1]:.0f}, {new_tcp[2]:.0f}]",
+                position='upper_left', font_size=12, color='yellow', name='help_text'
+            )
+    
+    def enable_drag_teaching(self, enabled: bool):
+        """启用/禁用拖动示教"""
+        self._drag_enabled = enabled
+        if not self._plotter:
+            return
+            
+        if enabled:
+            pose = self.kinematics.forward_kinematics(self._joint_angles)
+            tcp_pos = pose.position
+            
+            self._plotter.add_text(
+                f"拖动示教已启用 - 左键拖动绿色球体 | TCP: [{tcp_pos[0]:.0f}, {tcp_pos[1]:.0f}, {tcp_pos[2]:.0f}]",
+                position='upper_left', font_size=12, color='lime', name='help_text'
+            )
+            
+            # 重绘机器人以显示可拖动的TCP球
+            self._draw_robot()
+        else:
+            self._plotter.add_text(
+                "SR5-C 机器人控制系统",
+                position='upper_left', font_size=10, color='white', name='help_text'
+            )
+            self._draw_robot()
+        
+        if self._plotter:
+            self._plotter.render()
     
     def _draw_robot(self):
-        """绘制机器人"""
+        """绘制机器人 - 使用关节位置直接绘制"""
         if not self._plotter or not self.kinematics:
             return
         
@@ -130,38 +422,96 @@ class RobotViewer3D(QWidget):
             self._plotter.remove_actor(actor)
         self._robot_actors.clear()
         
-        # 获取关节位置
-        joint_positions = self.kinematics.get_joint_positions(self._joint_angles)
+        # 清除旧的坐标系
+        for actor in self._coordinate_actors:
+            self._plotter.remove_actor(actor)
+        self._coordinate_actors.clear()
         
-        # 连杆颜色
-        colors = ['#FFD700', '#4169E1', '#32CD32', '#FF6347', '#9370DB', '#20B2AA']
+        # 获取关节位置 (7个点: 基座 + 6个关节)
+        positions = self.kinematics.get_joint_positions(self._joint_angles)
         
-        # 绘制连杆
-        for i in range(len(joint_positions) - 1):
-            start = joint_positions[i]
-            end = joint_positions[i + 1]
-            
-            # 创建圆柱体连杆
-            link = self._create_link(start, end, radius=20)
-            if link:
-                actor = self._plotter.add_mesh(link, color=colors[i % len(colors)], 
-                                               opacity=0.9, smooth_shading=True)
-                self._robot_actors.append(actor)
+        # 颜色方案 - Rokae橙白配色
+        ORANGE = '#FF6600'
+        WHITE = '#E8E8E8'
+        GRAY = '#505050'
+        DARK_GRAY = '#303030'
         
-        # 绘制关节球
-        for i, pos in enumerate(joint_positions):
-            sphere = pv.Sphere(radius=25, center=pos)
-            actor = self._plotter.add_mesh(sphere, color='#808080', 
-                                          smooth_shading=True)
+        # ========== 1. 基座 ==========
+        # 底座圆盘
+        base = pv.Cylinder(center=[0, 0, 20], direction=[0, 0, 1], radius=100, height=40)
+        actor = self._plotter.add_mesh(base, color=DARK_GRAY, smooth_shading=True)
+        self._robot_actors.append(actor)
+        
+        # 基座到J1的立柱
+        p0, p1 = np.array(positions[0]), np.array(positions[1])
+        base_link = self._create_cylinder_link(np.array([0, 0, 40]), p1, radius=55)
+        if base_link:
+            actor = self._plotter.add_mesh(base_link, color=ORANGE, smooth_shading=True)
             self._robot_actors.append(actor)
         
-        # 绘制末端执行器坐标系
-        if len(joint_positions) > 0:
-            pose = self.kinematics.forward_kinematics(self._joint_angles)
-            T = np.eye(4)
-            T[:3, :3] = pose.rotation_matrix
-            T[:3, 3] = pose.position
-            self._add_coordinate_frame(T, scale=50, name="tcp")
+        # ========== 2. 连杆绘制 ==========
+        link_colors = [ORANGE, WHITE, ORANGE, WHITE, ORANGE, WHITE]
+        link_radii = [50, 45, 40, 35, 30, 25]
+        
+        for i in range(len(positions) - 1):
+            start = np.array(positions[i])
+            end = np.array(positions[i + 1])
+            
+            # 创建连杆
+            link = self._create_cylinder_link(start, end, radius=link_radii[i])
+            if link:
+                actor = self._plotter.add_mesh(link, color=link_colors[i], smooth_shading=True)
+                self._robot_actors.append(actor)
+            
+            # 关节球
+            joint_sphere = pv.Sphere(radius=link_radii[i] + 5, center=start)
+            actor = self._plotter.add_mesh(joint_sphere, color=GRAY, smooth_shading=True)
+            self._robot_actors.append(actor)
+        
+        # ========== 3. 末端执行器 ==========
+        pose = self.kinematics.forward_kinematics(self._joint_angles)
+        tcp_pos = pose.position
+        
+        # TCP坐标系
+        T_tcp = np.eye(4)
+        T_tcp[:3, :3] = pose.rotation_matrix
+        T_tcp[:3, 3] = pose.position
+        self._add_coordinate_frame(T_tcp, scale=100, name="tcp")
+        
+        # 末端关节球
+        end_sphere = pv.Sphere(radius=30, center=positions[-1])
+        actor = self._plotter.add_mesh(end_sphere, color=GRAY, smooth_shading=True)
+        self._robot_actors.append(actor)
+        
+        # 夹爪 (简化)
+        tcp_z = pose.rotation_matrix[:, 2]
+        gripper = pv.Cylinder(center=tcp_pos, direction=tcp_z, radius=25, height=80)
+        actor = self._plotter.add_mesh(gripper, color=DARK_GRAY, smooth_shading=True)
+        self._robot_actors.append(actor)
+        
+        # ========== 4. TCP指示球 (拖动用) ==========
+        if self._drag_enabled:
+            tcp_sphere = pv.Sphere(radius=35, center=tcp_pos)
+            self._tcp_sphere_actor = self._plotter.add_mesh(
+                tcp_sphere, color='#00FF00', opacity=0.7, pickable=True
+            )
+            self._robot_actors.append(self._tcp_sphere_actor)
+        
+        # 更新夹爪上的箱子
+        if self._gripper_holding:
+            self._update_gripper_box()
+    
+    def _create_cylinder_link(self, start: np.ndarray, end: np.ndarray, radius: float = 30):
+        """创建圆柱体连杆"""
+        direction = end - start
+        length = np.linalg.norm(direction)
+        
+        if length < 1e-6:
+            return None
+        
+        center = (start + end) / 2
+        cylinder = pv.Cylinder(center=center, direction=direction, radius=radius, height=length)
+        return cylinder
     
     def _create_link(self, start: np.ndarray, end: np.ndarray, 
                     radius: float = 15):
@@ -215,19 +565,33 @@ class RobotViewer3D(QWidget):
         if len(angles) != 6:
             return
         
+        # 检查角度是否真的变化了 (优化性能)
+        angle_changed = False
+        for i in range(6):
+            if abs(self._joint_angles[i] - angles[i]) > 0.01:
+                angle_changed = True
+                break
+        
+        if not angle_changed:
+            return
+        
         self._joint_angles = list(angles)
         
-        # 记录轨迹点
-        if self.kinematics:
+        # 记录轨迹点 (降低频率，每5次更新记录一次)
+        if not hasattr(self, '_trajectory_counter'):
+            self._trajectory_counter = 0
+        self._trajectory_counter += 1
+        
+        if self.kinematics and self._trajectory_counter % 5 == 0:
             pose = self.kinematics.forward_kinematics(angles)
             self._add_trajectory_point(pose.position)
         
         # 更新机器人显示
         self._draw_robot()
         
-        # 更新显示
+        # 更新显示 (使用render代替update以提高性能)
         if self._plotter:
-            self._plotter.update()
+            self._plotter.render()
         
         self.joint_angles_changed.emit(self._joint_angles)
     

@@ -256,8 +256,7 @@ class MainWindow(QMainWindow):
         self.control_panel.virtual_real_changed.connect(self._on_virtual_real_changed)
         self.control_panel.speed_changed.connect(self._on_speed_changed)
         self.control_panel.joint_value_changed.connect(self._on_joint_changed)
-        self.control_panel.program_start_clicked.connect(self._on_program_start)
-        self.control_panel.program_stop_clicked.connect(self._on_program_stop)
+        # 程序启动/停止信号在main.py中处理，这里不重复连接
     
     def _on_update_timer(self):
         """定时器更新"""

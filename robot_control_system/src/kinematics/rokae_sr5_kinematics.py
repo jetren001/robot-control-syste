@@ -268,6 +268,19 @@ class RokaeSR5Kinematics:
         
         return positions
     
+    def get_joint_transforms(self, joint_angles: List[float]) -> List[np.ndarray]:
+        """
+        获取所有关节的变换矩阵 (用于精确可视化)
+        
+        Args:
+            joint_angles: 6个关节角度 (度)
+            
+        Returns:
+            6个关节的4x4变换矩阵列表
+        """
+        _, transforms = self.forward_kinematics(joint_angles, return_all_transforms=True)
+        return transforms
+    
     def check_workspace(self, position: List[float]) -> bool:
         """
         检查位置是否在工作空间内 (简化检查)
