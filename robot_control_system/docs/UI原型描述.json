@@ -1,0 +1,333 @@
+{
+  "metadata": {
+    "version": "1.0",
+    "created_date": "2026-01-28",
+    "author": "Cursor AI",
+    "description": "珞石 SR5-C 机器人控制系统 HMI 界面原型定义"
+  },
+  "main_window": {
+    "title": "珞石 SR5-C 机器人控制系统",
+    "size": {
+      "width": 1920,
+      "height": 1080
+    },
+    "min_size": {
+      "width": 1280,
+      "height": 720
+    },
+    "resizable": true,
+    "layout": "horizontal_split"
+  },
+  "layout_regions": {
+    "left_panel": {
+      "description": "3D数字孪生视窗",
+      "width_ratio": 0.7,
+      "components": ["robot_3d_viewer"]
+    },
+    "right_panel": {
+      "description": "控制面板区域",
+      "width_ratio": 0.3,
+      "components": ["control_panel", "status_panel", "alarm_panel"]
+    },
+    "bottom_bar": {
+      "description": "状态栏",
+      "height": 30,
+      "components": ["status_bar"]
+    }
+  },
+  "components": {
+    "robot_3d_viewer": {
+      "type": "PyVista3DWidget",
+      "description": "3D机器人可视化视窗",
+      "features": [
+        "实时显示机器人姿态",
+        "鼠标旋转/缩放/平移视角",
+        "显示坐标系",
+        "显示运动轨迹",
+        "显示工作空间边界"
+      ],
+      "controls": {
+        "left_click_drag": "旋转视角",
+        "right_click_drag": "平移视角",
+        "scroll": "缩放视角",
+        "middle_click": "重置视角"
+      },
+      "overlay_info": [
+        "TCP位置坐标",
+        "当前速度",
+        "运行模式"
+      ]
+    },
+    "control_panel": {
+      "type": "TabWidget",
+      "description": "主控制面板",
+      "tabs": [
+        {
+          "name": "基本控制",
+          "widgets": [
+            {
+              "id": "mode_switch",
+              "type": "ToggleSwitch",
+              "label": "手动/自动",
+              "options": ["手动", "自动"],
+              "default": "手动"
+            },
+            {
+              "id": "virtual_real_switch",
+              "type": "ToggleSwitch",
+              "label": "虚拟/实机",
+              "options": ["虚拟", "实机"],
+              "default": "虚拟"
+            },
+            {
+              "id": "servo_enable_btn",
+              "type": "PushButton",
+              "label": "伺服使能",
+              "color": "green",
+              "indicator": true
+            },
+            {
+              "id": "servo_disable_btn",
+              "type": "PushButton",
+              "label": "伺服禁止",
+              "color": "orange"
+            },
+            {
+              "id": "home_btn",
+              "type": "PushButton",
+              "label": "回原点",
+              "color": "blue"
+            },
+            {
+              "id": "estop_btn",
+              "type": "PushButton",
+              "label": "急停",
+              "color": "red",
+              "size": "large",
+              "style": "emergency"
+            },
+            {
+              "id": "speed_slider",
+              "type": "Slider",
+              "label": "速度调节",
+              "min": 1,
+              "max": 100,
+              "default": 50,
+              "unit": "%"
+            }
+          ]
+        },
+        {
+          "name": "关节控制",
+          "widgets": [
+            {
+              "id": "joint_display",
+              "type": "JointDisplayGroup",
+              "joints": 6,
+              "features": [
+                "角度显示",
+                "角度输入",
+                "滑块调节",
+                "点动按钮"
+              ],
+              "joint_config": [
+                {"name": "J1", "min": -170, "max": 170, "unit": "°"},
+                {"name": "J2", "min": -120, "max": 120, "unit": "°"},
+                {"name": "J3", "min": -170, "max": 170, "unit": "°"},
+                {"name": "J4", "min": -120, "max": 120, "unit": "°"},
+                {"name": "J5", "min": -170, "max": 170, "unit": "°"},
+                {"name": "J6", "min": -360, "max": 360, "unit": "°"}
+              ]
+            },
+            {
+              "id": "jog_buttons",
+              "type": "JogButtonGroup",
+              "description": "点动控制按钮",
+              "axes": ["J1", "J2", "J3", "J4", "J5", "J6"],
+              "directions": ["+", "-"]
+            }
+          ]
+        },
+        {
+          "name": "TCP控制",
+          "widgets": [
+            {
+              "id": "tcp_position",
+              "type": "CoordinateDisplay",
+              "label": "TCP位置",
+              "fields": [
+                {"name": "X", "unit": "mm"},
+                {"name": "Y", "unit": "mm"},
+                {"name": "Z", "unit": "mm"}
+              ]
+            },
+            {
+              "id": "tcp_orientation",
+              "type": "CoordinateDisplay",
+              "label": "TCP姿态",
+              "fields": [
+                {"name": "Rx", "unit": "°"},
+                {"name": "Ry", "unit": "°"},
+                {"name": "Rz", "unit": "°"}
+              ]
+            },
+            {
+              "id": "tcp_jog_buttons",
+              "type": "JogButtonGroup",
+              "description": "TCP点动控制",
+              "axes": ["X", "Y", "Z", "Rx", "Ry", "Rz"],
+              "directions": ["+", "-"]
+            }
+          ]
+        },
+        {
+          "name": "码垛程序",
+          "widgets": [
+            {
+              "id": "pallet_config",
+              "type": "PalletConfigPanel",
+              "fields": [
+                {"name": "rows", "label": "行数", "type": "spinbox", "min": 1, "max": 10, "default": 3},
+                {"name": "cols", "label": "列数", "type": "spinbox", "min": 1, "max": 10, "default": 3},
+                {"name": "layers", "label": "层数", "type": "spinbox", "min": 1, "max": 5, "default": 2}
+              ]
+            },
+            {
+              "id": "program_controls",
+              "type": "ButtonGroup",
+              "buttons": [
+                {"id": "start_btn", "label": "启动程序", "color": "green"},
+                {"id": "pause_btn", "label": "暂停", "color": "yellow"},
+                {"id": "stop_btn", "label": "停止", "color": "red"},
+                {"id": "reset_btn", "label": "复位", "color": "blue"}
+              ]
+            },
+            {
+              "id": "progress_display",
+              "type": "ProgressDisplay",
+              "fields": [
+                {"name": "current_cycle", "label": "当前循环"},
+                {"name": "total_cycles", "label": "总循环数"},
+                {"name": "progress_bar", "type": "progressbar"}
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    "status_panel": {
+      "type": "GroupBox",
+      "title": "系统状态",
+      "widgets": [
+        {
+          "id": "connection_status",
+          "type": "StatusIndicator",
+          "label": "连接状态",
+          "states": ["断开", "连接中", "已连接"]
+        },
+        {
+          "id": "run_mode",
+          "type": "StatusLabel",
+          "label": "运行模式"
+        },
+        {
+          "id": "state_machine",
+          "type": "StatusLabel",
+          "label": "状态机"
+        },
+        {
+          "id": "cycle_time",
+          "type": "StatusLabel",
+          "label": "周期时间"
+        }
+      ]
+    },
+    "alarm_panel": {
+      "type": "GroupBox",
+      "title": "报警信息",
+      "widgets": [
+        {
+          "id": "alarm_list",
+          "type": "AlarmListWidget",
+          "max_display": 5,
+          "columns": ["时间", "轴", "代码", "描述"],
+          "severity_colors": {
+            "error": "red",
+            "warning": "orange",
+            "info": "blue"
+          }
+        },
+        {
+          "id": "alarm_buttons",
+          "type": "ButtonGroup",
+          "buttons": [
+            {"id": "ack_btn", "label": "确认报警"},
+            {"id": "clear_btn", "label": "清除报警"},
+            {"id": "history_btn", "label": "历史记录"}
+          ]
+        }
+      ]
+    },
+    "status_bar": {
+      "type": "StatusBar",
+      "sections": [
+        {"id": "message", "width": "stretch", "description": "消息显示"},
+        {"id": "mode_indicator", "width": 100, "description": "虚拟/实机"},
+        {"id": "time", "width": 150, "description": "系统时间"}
+      ]
+    }
+  },
+  "color_scheme": {
+    "primary": "#1976D2",
+    "secondary": "#424242",
+    "success": "#4CAF50",
+    "warning": "#FF9800",
+    "danger": "#F44336",
+    "info": "#2196F3",
+    "background": "#FAFAFA",
+    "surface": "#FFFFFF",
+    "text_primary": "#212121",
+    "text_secondary": "#757575"
+  },
+  "interaction_logic": {
+    "mode_switch": {
+      "manual_to_auto": [
+        "检查所有轴已使能",
+        "检查无报警",
+        "检查已回原点"
+      ],
+      "auto_to_manual": [
+        "停止当前程序",
+        "保持伺服状态"
+      ]
+    },
+    "virtual_real_switch": {
+      "conditions": [
+        "必须在手动模式",
+        "伺服必须禁止"
+      ]
+    },
+    "emergency_stop": {
+      "actions": [
+        "立即停止所有运动",
+        "禁止所有伺服",
+        "记录报警",
+        "锁定界面"
+      ],
+      "recovery": [
+        "确认急停解除",
+        "清除报警",
+        "重新使能"
+      ]
+    }
+  },
+  "keyboard_shortcuts": {
+    "F1": "帮助",
+    "F5": "伺服使能",
+    "F6": "伺服禁止",
+    "F7": "启动程序",
+    "F8": "停止程序",
+    "Escape": "急停",
+    "Space": "暂停/继续"
+  }
+}

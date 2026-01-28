@@ -1,0 +1,17 @@
+# 珞石 SR5-C 机器人控制系统 - 依赖列表
+# 安装命令: pip install -r requirements.txt
+
+# 核心依赖
+numpy>=1.24
+scipy>=1.10
+PyQt5>=5.15
+
+# 3D可视化 (推荐安装)
+pyvista>=0.40
+pyvistaqt>=0.9
+
+# 可选: 用于加载STP模型
+# cadquery>=2.3
+
+# 开发和测试
+# pytest>=7.0
