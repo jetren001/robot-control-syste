@@ -272,17 +272,9 @@ class RobotViewer3D(QWidget):
             self._plotter.render()
     
     def _setup_mouse_interaction(self):
-        """设置鼠标交互"""
+        """设置鼠标交互 - 点击移动模式"""
         if not self._plotter:
             return
-        
-        # 存储鼠标拖动状态
-        self._drag_state = {
-            'dragging': False,
-            'start_pos': None,
-            'start_tcp': None,
-            'drag_plane': None,  # 拖动平面
-        }
         
         # 添加提示文字
         self._plotter.add_text(
@@ -290,119 +282,54 @@ class RobotViewer3D(QWidget):
             position='upper_left', font_size=10, color='white', name='help_text'
         )
         
-        # 获取交互器并添加观察者
-        try:
-            iren = self._plotter.iren.interactor
-            if iren:
-                iren.AddObserver('LeftButtonPressEvent', self._on_left_button_press)
-                iren.AddObserver('LeftButtonReleaseEvent', self._on_left_button_release)
-                iren.AddObserver('MouseMoveEvent', self._on_mouse_move)
-        except Exception as e:
-            print(f"[3D] 设置鼠标交互失败: {e}")
+        # 显示当前TCP坐标
+        self._update_tcp_display()
     
-    def _on_left_button_press(self, obj, event):
-        """鼠标左键按下"""
-        if not self._drag_enabled:
+    def _update_tcp_display(self):
+        """更新TCP坐标显示"""
+        if not self._plotter or not self.kinematics:
             return
-        
-        # 获取点击位置
-        click_pos = self._plotter.iren.interactor.GetEventPosition()
-        
-        # 检测是否点击了TCP球体
-        picker = self._plotter.iren.picker
-        picker.Pick(click_pos[0], click_pos[1], 0, self._plotter.renderer)
-        
-        picked_pos = picker.GetPickPosition()
-        if picked_pos and any(p != 0 for p in picked_pos):
-            # 检查是否接近TCP
-            pose = self.kinematics.forward_kinematics(self._joint_angles)
-            tcp_pos = pose.position
-            
-            dist = np.linalg.norm(np.array(picked_pos) - tcp_pos)
-            if dist < 50:  # 50mm范围内认为点击了TCP
-                self._drag_state['dragging'] = True
-                self._drag_state['start_pos'] = np.array(picked_pos)
-                self._drag_state['start_tcp'] = tcp_pos.copy()
-                
-                # 设置拖动平面 (XY平面，Z等于当前TCP高度)
-                self._drag_state['drag_plane'] = tcp_pos[2]
-                
-                print(f"[3D] 开始拖动 TCP: {tcp_pos}")
-                
-                # 更新提示
-                self._plotter.add_text(
-                    f"拖动中... TCP: [{tcp_pos[0]:.0f}, {tcp_pos[1]:.0f}, {tcp_pos[2]:.0f}]",
-                    position='upper_left', font_size=12, color='lime', name='help_text'
-                )
-    
-    def _on_left_button_release(self, obj, event):
-        """鼠标左键释放"""
-        if self._drag_state.get('dragging'):
-            self._drag_state['dragging'] = False
-            
-            # 获取最终位置
-            pose = self.kinematics.forward_kinematics(self._joint_angles)
-            tcp_pos = pose.position
-            
-            print(f"[3D] 拖动结束 TCP: {tcp_pos}")
-            
-            self._plotter.add_text(
-                f"拖动示教已启用 - 左键拖动绿色球体 | TCP: [{tcp_pos[0]:.0f}, {tcp_pos[1]:.0f}, {tcp_pos[2]:.0f}]",
-                position='upper_left', font_size=12, color='lime', name='help_text'
-            )
-    
-    def _on_mouse_move(self, obj, event):
-        """鼠标移动"""
-        if not self._drag_state.get('dragging'):
-            return
-        
-        # 获取当前鼠标位置
-        mouse_pos = self._plotter.iren.interactor.GetEventPosition()
-        
-        # 将屏幕坐标转换为世界坐标
-        picker = self._plotter.iren.picker
-        picker.Pick(mouse_pos[0], mouse_pos[1], 0, self._plotter.renderer)
-        
-        world_pos = picker.GetPickPosition()
-        if world_pos and any(p != 0 for p in world_pos):
-            # 计算新的TCP位置 (保持Z不变，或者使用拖动平面)
-            new_tcp = np.array([
-                world_pos[0],
-                world_pos[1],
-                self._drag_state['drag_plane']  # 保持Z高度
-            ])
-            
-            # 获取当前姿态
-            current_pose = self.kinematics.forward_kinematics(self._joint_angles)
-            target_ori = current_pose.euler_angles.tolist()
-            
-            # 发送信号让主程序处理逆运动学
-            self.tcp_dragged.emit(new_tcp.tolist(), target_ori)
-            
-            # 更新提示
-            self._plotter.add_text(
-                f"拖动中... TCP: [{new_tcp[0]:.0f}, {new_tcp[1]:.0f}, {new_tcp[2]:.0f}]",
-                position='upper_left', font_size=12, color='yellow', name='help_text'
-            )
+        pose = self.kinematics.forward_kinematics(self._joint_angles)
+        tcp = pose.position
+        self._plotter.add_text(
+            f"TCP: [{tcp[0]:.1f}, {tcp[1]:.1f}, {tcp[2]:.1f}]",
+            position='upper_right', font_size=10, color='cyan', name='tcp_display'
+        )
     
     def enable_drag_teaching(self, enabled: bool):
-        """启用/禁用拖动示教"""
+        """启用/禁用点击移动示教"""
         self._drag_enabled = enabled
         if not self._plotter:
             return
             
         if enabled:
+            # 启用点选模式 - 点击场景中任意位置，TCP移动到该XY位置
+            self._plotter.enable_surface_point_picking(
+                callback=self._on_surface_picked,
+                show_message=False,
+                show_point=True,
+                color='lime',
+                point_size=15,
+                tolerance=0.01,
+            )
+            
             pose = self.kinematics.forward_kinematics(self._joint_angles)
             tcp_pos = pose.position
             
             self._plotter.add_text(
-                f"拖动示教已启用 - 左键拖动绿色球体 | TCP: [{tcp_pos[0]:.0f}, {tcp_pos[1]:.0f}, {tcp_pos[2]:.0f}]",
-                position='upper_left', font_size=12, color='lime', name='help_text'
+                f"点击示教已启用 - 点击场景设置目标XY位置 (Z保持{tcp_pos[2]:.0f}mm)",
+                position='upper_left', font_size=11, color='lime', name='help_text'
             )
             
-            # 重绘机器人以显示可拖动的TCP球
+            # 重绘机器人以显示TCP指示球
             self._draw_robot()
         else:
+            # 禁用点选
+            try:
+                self._plotter.disable_picking()
+            except:
+                pass
+            
             self._plotter.add_text(
                 "SR5-C 机器人控制系统",
                 position='upper_left', font_size=10, color='white', name='help_text'
@@ -411,6 +338,36 @@ class RobotViewer3D(QWidget):
         
         if self._plotter:
             self._plotter.render()
+    
+    def _on_surface_picked(self, point):
+        """当用户点击场景表面时"""
+        if not self._drag_enabled or point is None:
+            return
+        
+        print(f"[3D] 点击位置: {point}")
+        
+        # 获取当前TCP位置和姿态
+        pose = self.kinematics.forward_kinematics(self._joint_angles)
+        current_z = pose.position[2]
+        
+        # 新目标位置：点击的XY + 当前Z高度
+        target_pos = [point[0], point[1], current_z]
+        target_ori = pose.euler_angles.tolist()
+        
+        print(f"[3D] 目标TCP: {target_pos}")
+        
+        # 发送信号
+        self.tcp_dragged.emit(target_pos, target_ori)
+        
+        # 更新提示
+        self._plotter.add_text(
+            f"移动到: [{target_pos[0]:.0f}, {target_pos[1]:.0f}, {target_pos[2]:.0f}]",
+            position='upper_left', font_size=11, color='yellow', name='help_text'
+        )
+    
+    def set_tcp_z_height(self, z: float):
+        """设置TCP目标Z高度"""
+        self._target_z = z
     
     def _draw_robot(self):
         """绘制机器人 - 使用关节位置直接绘制"""

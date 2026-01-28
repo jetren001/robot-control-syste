@@ -377,18 +377,42 @@ class ControlPanel(QWidget):
         
         # 拖动示教
         drag_group = QGroupBox("拖动示教")
-        drag_layout = QHBoxLayout(drag_group)
+        drag_layout = QVBoxLayout(drag_group)
         
-        self.btn_drag_teaching = QPushButton("启用拖动示教")
+        # 第一行：启用按钮
+        row1 = QHBoxLayout()
+        self.btn_drag_teaching = QPushButton("启用点击示教")
         self.btn_drag_teaching.setCheckable(True)
         self.btn_drag_teaching.setStyleSheet("""
             QPushButton { background-color: #607D8B; color: white; }
             QPushButton:checked { background-color: #4CAF50; }
         """)
         self.btn_drag_teaching.setMinimumHeight(40)
-        drag_layout.addWidget(self.btn_drag_teaching)
+        row1.addWidget(self.btn_drag_teaching)
+        row1.addWidget(QLabel("点击3D场景设置XY目标"))
+        drag_layout.addLayout(row1)
         
-        drag_layout.addWidget(QLabel("提示: 启用后可在3D视图中拖动机器人末端"))
+        # 第二行：Z高度控制
+        row2 = QHBoxLayout()
+        row2.addWidget(QLabel("目标Z高度:"))
+        self.spin_target_z = QDoubleSpinBox()
+        self.spin_target_z.setRange(0, 1000)
+        self.spin_target_z.setValue(500)
+        self.spin_target_z.setSuffix(" mm")
+        row2.addWidget(self.spin_target_z)
+        
+        self.btn_z_up = QPushButton("Z+50")
+        self.btn_z_up.setMaximumWidth(60)
+        row2.addWidget(self.btn_z_up)
+        
+        self.btn_z_down = QPushButton("Z-50")
+        self.btn_z_down.setMaximumWidth(60)
+        row2.addWidget(self.btn_z_down)
+        drag_layout.addLayout(row2)
+        
+        # 连接Z高度按钮
+        self.btn_z_up.clicked.connect(lambda: self.spin_target_z.setValue(self.spin_target_z.value() + 50))
+        self.btn_z_down.clicked.connect(lambda: self.spin_target_z.setValue(self.spin_target_z.value() - 50))
         
         layout.addWidget(drag_group)
         layout.addStretch()

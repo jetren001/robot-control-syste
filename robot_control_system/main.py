@@ -358,40 +358,38 @@ def main():
         else:
             window.show_message("拖动示教已禁用")
     
-    # 拖动示教的IK缓存和节流
-    drag_ik_cache = {'last_time': 0, 'last_pos': None}
-    
     def on_tcp_dragged(target_pos, target_ori):
-        """处理拖动示教 - 实时移动机器人到目标位置"""
-        import time
-        
+        """处理点击示教 - 移动机器人到目标位置"""
         if not driver.is_servo_enabled():
-            return  # 拖动时不弹消息，避免干扰
-        
-        # 节流：限制IK计算频率 (最多20Hz)
-        current_time = time.time()
-        if current_time - drag_ik_cache['last_time'] < 0.05:
+            window.show_message("请先使能伺服", "orange")
             return
-        drag_ik_cache['last_time'] = current_time
+        
+        # 获取UI中设置的目标Z高度
+        target_z = window.control_panel.spin_target_z.value()
+        target_pos_with_z = [target_pos[0], target_pos[1], target_z]
+        
+        logger.info(f"点击示教目标: X={target_pos[0]:.1f}, Y={target_pos[1]:.1f}, Z={target_z:.1f}")
         
         # 使用逆运动学计算关节角度
         from src.kinematics import RokaeSR5Kinematics
         kin = RokaeSR5Kinematics(use_simplified=True)
         current_joints = driver.get_positions()
         
-        # 快速IK (减少迭代次数以提高响应速度)
         result_joints, converged = kin.inverse_kinematics(
-            target_pos, target_ori, initial_guess=current_joints,
-            max_iterations=50, tolerance=5.0  # 放宽精度以加速
+            target_pos_with_z, target_ori, initial_guess=current_joints,
+            max_iterations=200, tolerance=2.0
         )
         
         if converged:
-            driver.set_positions(list(result_joints), velocity=100)
+            driver.set_positions(list(result_joints), velocity=80)
             robot_viewer.set_joint_angles(list(result_joints))
             window.update_joint_display(list(result_joints))
             # 更新TCP显示
             new_tcp_pos, new_tcp_ori = robot_viewer.get_tcp_position()
             window.update_tcp_display(new_tcp_pos, new_tcp_ori)
+            window.show_message(f"移动到: [{target_pos_with_z[0]:.0f}, {target_pos_with_z[1]:.0f}, {target_pos_with_z[2]:.0f}]")
+        else:
+            window.show_message("目标位置超出工作范围", "red")
     
     def generate_palletizing_path():
         """生成码垛路径"""
